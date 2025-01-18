@@ -3,6 +3,10 @@ from tkinter import ttk
 import tkinter.scrolledtext as scrolledtext
 from interactive_chat import InteractiveLearningBot
 import torch
+import requests
+import json
+import os
+from urllib.parse import quote
 
 class DarkTheme:
     # Основные цвета
@@ -24,6 +28,33 @@ class DarkTheme:
     CHAT_USER_MSG = "#4a9eff"  # Цвет сообщений пользователя
     CHAT_BOT_MSG = "#45c937"  # Цвет сообщений бота
 
+class WebSearch:
+    def __init__(self):
+        try:
+            from googlesearch import search
+            self.search_func = search
+        except ImportError:
+            print("Установите библиотеку: pip install googlesearch-python")
+            self.search_func = None
+        
+    def search(self, query, num_results=4):
+        """Поиск в Google"""
+        if not self.search_func:
+            return ["Установите библиотеку googlesearch-python командой:\npip install googlesearch-python"]
+            
+        try:
+            # Выполняем поиск
+            results = []
+            for url in self.search_func(query, lang='ru', num_results=num_results):
+                results.append(f"🔗 {url}")
+            
+            if results:
+                return results
+            return ["По вашему запросу ничего не найдено"]
+            
+        except Exception as e:
+            return [f"Ошибка при поиске: {str(e)}"]
+
 class ChatGUI:
     def __init__(self, root):
         self.root = root
@@ -33,8 +64,9 @@ class ChatGUI:
         # Применяем темную тему
         self.apply_dark_theme()
         
-        # Инициализируем бота
+        # Инициализируем бота и поисковик
         self.bot = InteractiveLearningBot()
+        self.web_search = WebSearch()
         
         # Создаем и размещаем компоненты
         self.create_widgets()
@@ -263,8 +295,8 @@ class ChatGUI:
         
     def show_response_options(self, responses):
         # Очищаем предыдущие кнопки
-        for btn in self.response_buttons:
-            btn.destroy()
+        for frame, label in self.response_buttons:
+            frame.destroy()
         self.response_buttons.clear()
         
         # Создаем новые кнопки с вариантами ответов
@@ -285,34 +317,53 @@ class ChatGUI:
                 bg=DarkTheme.BUTTON_BG,
                 fg=DarkTheme.BUTTON_FG,
                 font=("Segoe UI", 10),
-                wraplength=300,  # Ограничиваем ширину текста
+                wraplength=300,
                 justify=tk.LEFT,
                 padx=5,
                 pady=5
             )
             label.pack(fill=tk.BOTH, expand=True)
             
-            # Добавляем обработчики событий для эффекта при наведении
-            def on_enter(e, frame=btn_frame, lbl=label):
-                frame.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-                lbl.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-                
-            def on_leave(e, frame=btn_frame, lbl=label):
-                frame.configure(bg=DarkTheme.BUTTON_BG)
-                lbl.configure(bg=DarkTheme.BUTTON_BG)
-                
-            def on_click(r=response):
-                self.select_response(r)
-            
-            btn_frame.bind("<Enter>", on_enter)
-            btn_frame.bind("<Leave>", on_leave)
-            btn_frame.bind("<Button-1>", lambda e, r=response: on_click(r))
-            label.bind("<Enter>", on_enter)
-            label.bind("<Leave>", on_leave)
-            label.bind("<Button-1>", lambda e, r=response: on_click(r))
+            # Добавляем обработчики событий
+            self.add_button_handlers(btn_frame, label, response)
             
             self.response_buttons.append((btn_frame, label))
             
+        # Добавляем кнопку поиска в интернете
+        search_frame = tk.Frame(
+            self.responses_frame,
+            bg=DarkTheme.BUTTON_BG,
+            padx=10,
+            pady=10
+        )
+        search_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+        
+        search_label = tk.Label(
+            search_frame,
+            text="🔍 Поиск в интернете",
+            bg=DarkTheme.BUTTON_BG,
+            fg=DarkTheme.BUTTON_FG,
+            font=("Segoe UI", 10),
+            padx=5,
+            pady=5
+        )
+        search_label.pack(fill=tk.BOTH, expand=True)
+        
+        def on_search_enter(e):
+            search_frame.configure(bg=DarkTheme.BUTTON_BG_HOVER)
+            search_label.configure(bg=DarkTheme.BUTTON_BG_HOVER)
+            
+        def on_search_leave(e):
+            search_frame.configure(bg=DarkTheme.BUTTON_BG)
+            search_label.configure(bg=DarkTheme.BUTTON_BG)
+            
+        search_frame.bind("<Enter>", on_search_enter)
+        search_frame.bind("<Leave>", on_search_leave)
+        search_frame.bind("<Button-1>", lambda e: self.search_web())
+        search_label.bind("<Enter>", on_search_enter)
+        search_label.bind("<Leave>", on_search_leave)
+        search_label.bind("<Button-1>", lambda e: self.search_web())
+        
         # Добавляем кнопку для своего варианта
         custom_frame = tk.Frame(
             self.responses_frame,
@@ -320,11 +371,11 @@ class ChatGUI:
             padx=10,
             pady=10
         )
-        custom_frame.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        custom_frame.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
         
         custom_label = tk.Label(
             custom_frame,
-            text="Свой вариант ответа",
+            text="✏️ Свой вариант ответа",
             bg=DarkTheme.BUTTON_BG,
             fg=DarkTheme.BUTTON_FG,
             font=("Segoe UI", 10),
@@ -348,11 +399,40 @@ class ChatGUI:
         custom_label.bind("<Leave>", on_custom_leave)
         custom_label.bind("<Button-1>", lambda e: self.show_custom_response_dialog())
         
-        self.response_buttons.append((custom_frame, custom_label))
+        self.response_buttons.extend([(search_frame, search_label), (custom_frame, custom_label)])
         
-        # Настраиваем растяжение колонок в responses_frame
-        self.responses_frame.columnconfigure(0, weight=1)
-        self.responses_frame.columnconfigure(1, weight=1)
+    def search_web(self):
+        """Поиск в интернете и отображение результатов"""
+        # Получаем результаты поиска
+        search_results = self.web_search.search(self.current_user_input)
+        
+        # Очищаем текущие варианты ответов
+        for frame, label in self.response_buttons:
+            frame.destroy()
+        self.response_buttons.clear()
+        
+        # Показываем результаты поиска как варианты ответов
+        self.show_response_options(search_results)
+        
+    def add_button_handlers(self, frame, label, response):
+        """Добавляет обработчики событий для кнопки"""
+        def on_enter(e):
+            frame.configure(bg=DarkTheme.BUTTON_BG_HOVER)
+            label.configure(bg=DarkTheme.BUTTON_BG_HOVER)
+            
+        def on_leave(e):
+            frame.configure(bg=DarkTheme.BUTTON_BG)
+            label.configure(bg=DarkTheme.BUTTON_BG)
+            
+        def on_click(r=response):
+            self.select_response(r)
+            
+        frame.bind("<Enter>", on_enter)
+        frame.bind("<Leave>", on_leave)
+        frame.bind("<Button-1>", lambda e, r=response: on_click(r))
+        label.bind("<Enter>", on_enter)
+        label.bind("<Leave>", on_leave)
+        label.bind("<Button-1>", lambda e, r=response: on_click(r))
         
     def select_response(self, selected_response):
         # Добавляем выбранный ответ в чат

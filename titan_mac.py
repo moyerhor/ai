@@ -3,53 +3,66 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List
 
-class SimpleBot(nn.Module):
-    def __init__(self, vocab_size=1024, hidden_size=256):
+class TitanMAC(nn.Module):
+    def __init__(self, vocab_size=1024, d_model=256, nhead=8, num_layers=4):
         super().__init__()
         self.vocab_size = vocab_size
-        self.hidden_size = hidden_size
+        self.d_model = d_model
         
-        # Простой энкодер
-        self.embedding = nn.Embedding(vocab_size, hidden_size)
-        self.encoder = nn.LSTM(hidden_size, hidden_size, num_layers=2, batch_first=True)
+        # Эмбеддинги и позиционное кодирование
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.pos_encoder = PositionalEncoding(d_model)
         
-        # Простой декодер
-        self.decoder = nn.LSTM(hidden_size, hidden_size, num_layers=2, batch_first=True)
-        self.output = nn.Linear(hidden_size, vocab_size)
+        # Transformer энкодер
+        encoder_layers = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers)
         
-    def forward(self, src):
-        # Эмбеддинг входных токенов
-        embedded = self.embedding(src)
+        # Выходной слой
+        self.output = nn.Linear(d_model, vocab_size)
         
-        # Кодирование
-        encoder_output, (hidden, cell) = self.encoder(embedded)
+        # Инициализация весов
+        self.init_weights()
         
-        # Декодирование
-        decoder_output, _ = self.decoder(embedded, (hidden, cell))
+    def init_weights(self):
+        initrange = 0.1
+        self.embedding.weight.data.uniform_(-initrange, initrange)
+        self.output.bias.data.zero_()
+        self.output.weight.data.uniform_(-initrange, initrange)
+        
+    def forward(self, src, src_mask=None):
+        # Эмбеддинг и позиционное кодирование
+        src = self.embedding(src) * torch.sqrt(torch.tensor(self.d_model, dtype=torch.float32))
+        src = self.pos_encoder(src)
+        
+        # Проход через трансформер
+        output = self.transformer_encoder(src, src_mask)
         
         # Получаем логиты для каждого токена
-        output = self.output(decoder_output)
+        output = self.output(output)
         
         return output
     
     def generate(self, input_ids, max_length=100, temperature=0.7):
         self.eval()
         with torch.no_grad():
-            # Начальный проход через энкодер
-            embedded = self.embedding(input_ids)
-            _, (hidden, cell) = self.encoder(embedded)
+            # Начальный проход через модель
+            src = self.embedding(input_ids) * torch.sqrt(torch.tensor(self.d_model, dtype=torch.float32))
+            src = self.pos_encoder(src)
+            memory = self.transformer_encoder(src)
             
-            # Используем последний токен входа как первый токен для декодера
+            # Используем последний токен входа как первый токен для генерации
             current_token = input_ids[:, -1:]
             generated = input_ids
             
             # Генерируем токены
             for _ in range(max_length):
-                token_embedding = self.embedding(current_token)
-                decoder_output, (hidden, cell) = self.decoder(token_embedding, (hidden, cell))
+                # Эмбеддинг текущего токена
+                token_embedding = self.embedding(current_token) * torch.sqrt(torch.tensor(self.d_model, dtype=torch.float32))
+                token_embedding = self.pos_encoder(token_embedding)
                 
                 # Получаем следующий токен
-                logits = self.output(decoder_output)
+                decoder_output = self.transformer_encoder(token_embedding)
+                logits = self.output(decoder_output[:, -1:])
                 
                 # Применяем температуру и softmax
                 logits = logits / temperature
@@ -72,11 +85,29 @@ class SimpleBot(nn.Module):
                     
         return generated
 
-class SimpleTokenizer:
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        
+        # Создаем матрицу позиционного кодирования
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+        
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1)]
+
+class Tokenizer:
     def __init__(self, vocab_size=1024):
         self.vocab_size = vocab_size
         
-        # Создаем простой словарь
+        # Создаем словарь
         self.char_to_idx = {chr(i): i for i in range(32, 127)}
         self.idx_to_char = {i: chr(i) for i in range(32, 127)}
         
@@ -113,10 +144,10 @@ class SimpleTokenizer:
                 text.append(self.idx_to_char[token])
         return ''.join(text)
 
-class SimpleChatBot:
-    def __init__(self, vocab_size=1024, hidden_size=256):
-        self.model = SimpleBot(vocab_size=vocab_size, hidden_size=hidden_size)
-        self.tokenizer = SimpleTokenizer(vocab_size=vocab_size)
+class TitanMACBot:
+    def __init__(self, vocab_size=1024, d_model=256, nhead=8, num_layers=4):
+        self.model = TitanMAC(vocab_size=vocab_size, d_model=d_model, nhead=nhead, num_layers=num_layers)
+        self.tokenizer = Tokenizer(vocab_size=vocab_size)
         
     def save(self, path: str):
         torch.save(self.model.state_dict(), path)

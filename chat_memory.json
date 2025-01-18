@@ -422,5 +422,19 @@
     "timestamp": "2025-01-18 16:02:45",
     "loss": 0.42532777786254883,
     "was_corrected": true
+  },
+  {
+    "user_input": "привет",
+    "bot_response": "Привет",
+    "timestamp": "2025-01-18 16:12:23",
+    "loss": 0.4018482267856598,
+    "was_corrected": true
+  },
+  {
+    "user_input": "привет",
+    "bot_response": "здравствуйте",
+    "timestamp": "2025-01-18 16:19:42",
+    "loss": 7.586029529571533,
+    "was_corrected": true
   }
 ]

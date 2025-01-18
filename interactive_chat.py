@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from titan_llm import SimpleChatBot
+from titan_mac import TitanMACBot
 import os
 import json
 from datetime import datetime
 
 class InteractiveLearningBot:
-    def __init__(self, vocab_size=1024, hidden_size=256):
-        self.chatbot = SimpleChatBot(vocab_size=vocab_size, hidden_size=hidden_size)
+    def __init__(self, vocab_size=1024, d_model=256, nhead=8, num_layers=4):
+        self.chatbot = TitanMACBot(vocab_size=vocab_size, d_model=d_model, nhead=nhead, num_layers=num_layers)
         self.optimizer = optim.Adam(self.chatbot.model.parameters(), lr=1e-3)
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=0)  # игнорируем PAD токен
         self.conversation_history = []
@@ -49,50 +49,15 @@ class InteractiveLearningBot:
                 print("Не удалось загрузить модель, начинаем с начала")
     
     def try_generate_better_response(self, user_input, wrong_response):
-        """Пытается сгенерировать лучший ответ на основе контекста"""
-        # Список возможных ответов для разных типов вопросов
-        responses = {
-            'кто': [
-                'Я чат-бот, который учится общаться',
-                'Я ваш виртуальный собеседник',
-                'Я искусственный интеллект в процессе обучения',
-                'Я простой чат-бот, который хочет научиться общаться'
-            ],
-            'как': [
-                'Хорошо, спасибо',
-                'Нормально',
-                'Отлично',
-                'В процессе обучения'
-            ],
-            'привет': [
-                'Здравствуйте',
-                'Привет',
-                'Добрый день',
-                'Рад вас видеть'
-            ],
-            'default': [
-                'Интересный вопрос',
-                'Давайте поговорим об этом',
-                'Мне нужно подумать над этим',
-                'Это сложный вопрос для меня'
-            ]
-        }
-
-        # Определяем тип вопроса
-        question_type = 'default'
-        user_input_lower = user_input.lower()
-        for key in responses.keys():
-            if key in user_input_lower:
-                question_type = key
-                break
-
-        # Пробуем разные варианты ответов
+        """Пытается сгенерировать лучший ответ"""
+        # Собираем все похожие диалоги из истории
+        similar_dialogues = []
+        for conv in self.conversation_history:
+            if any(word in conv['user_input'].lower() for word in user_input.lower().split()):
+                similar_dialogues.append(conv)
+        
+        # Генерируем варианты ответов с разными параметрами
         attempts = []
-        
-        # Добавляем специфичные ответы для данного типа вопроса
-        attempts.extend(responses[question_type])
-        
-        # Пробуем сгенерировать новые ответы с разными параметрами
         temperatures = [0.5, 0.7, 1.0, 1.2]
         max_lengths = [50, 100, 150]
         
@@ -101,15 +66,17 @@ class InteractiveLearningBot:
                 response = self.chatbot.generate_response(user_input, temperature=temp, max_length=length)
                 if response and response != wrong_response and len(response.strip()) >= 3:
                     attempts.append(response)
-
+        
         # Убираем дубликаты и пустые ответы
         attempts = list(set(filter(None, attempts)))
         attempts = [r for r in attempts if r != wrong_response and len(r.strip()) >= 3]
-
+        
         if attempts:
             return attempts[torch.randint(0, len(attempts), (1,)).item()]
-        return "Извините, я пока учусь отвечать правильно"
-
+            
+        # Если нет подходящих ответов, генерируем новый ответ с высокой температурой
+        return self.chatbot.generate_response(user_input, temperature=1.2, max_length=150)
+        
     def learn_from_interaction(self, user_input, wrong_response):
         """Обучение на одном взаимодействии"""
         # Генерируем новый ответ
