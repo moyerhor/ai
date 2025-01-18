@@ -387,5 +387,40 @@
     "timestamp": "2025-01-18 15:47:33",
     "loss": 0.602287232875824,
     "was_corrected": true
+  },
+  {
+    "user_input": "привет",
+    "bot_response": "Привет!",
+    "timestamp": "2025-01-18 15:52:57",
+    "loss": 1.2872377634048462,
+    "was_corrected": true
+  },
+  {
+    "user_input": "как дела?",
+    "bot_response": "Привет!",
+    "timestamp": "2025-01-18 15:53:29",
+    "loss": 1.494534969329834,
+    "was_corrected": true
+  },
+  {
+    "user_input": "привет",
+    "bot_response": "Интересно",
+    "timestamp": "2025-01-18 15:59:52",
+    "loss": 0.09344702214002609,
+    "was_corrected": true
+  },
+  {
+    "user_input": "йоу бро, как жизнь?",
+    "bot_response": "Нормально",
+    "timestamp": "2025-01-18 16:02:12",
+    "loss": 0.6929119229316711,
+    "was_corrected": true
+  },
+  {
+    "user_input": "ты умный?",
+    "bot_response": "Хорошо",
+    "timestamp": "2025-01-18 16:02:45",
+    "loss": 0.42532777786254883,
+    "was_corrected": true
   }
 ]

@@ -1,0 +1,3 @@
+__pycache__/
+*.pth
+chat_memory.json
