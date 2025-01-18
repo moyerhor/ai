@@ -1,32 +1,13 @@
-import tkinter as tk
-from tkinter import ttk
-import tkinter.scrolledtext as scrolledtext
-from interactive_chat import InteractiveLearningBot
+import customtkinter as ctk
 import torch
 import requests
 import json
 import os
 from urllib.parse import quote
-
-class DarkTheme:
-    # Основные цвета
-    BG_COLOR = "#1e1e1e"  # Более темный фон
-    FG_COLOR = "#e0e0e0"  # Более мягкий белый для текста
-    
-    # Цвета для кнопок
-    BUTTON_BG = "#2d2d2d"  # Темный фон кнопок
-    BUTTON_BG_HOVER = "#3d3d3d"  # Цвет при наведении
-    BUTTON_FG = "#e0e0e0"  # Цвет текста кнопок
-    
-    # Цвета для полей ввода
-    ENTRY_BG = "#2d2d2d"  # Фон полей ввода
-    ENTRY_FG = "#e0e0e0"  # Цвет текста в полях ввода
-    
-    # Цвета для чата
-    CHAT_BG = "#1e1e1e"  # Фон области чата
-    CHAT_FG = "#e0e0e0"  # Цвет текста чата
-    CHAT_USER_MSG = "#4a9eff"  # Цвет сообщений пользователя
-    CHAT_BOT_MSG = "#45c937"  # Цвет сообщений бота
+from datetime import datetime
+import torch.nn as nn
+import torch.optim as optim
+from titan_mac import TitanMACBot
 
 class WebSearch:
     def __init__(self):
@@ -36,7 +17,7 @@ class WebSearch:
         except ImportError:
             print("Установите библиотеку: pip install googlesearch-python")
             self.search_func = None
-        
+            
     def search(self, query, num_results=4):
         """Поиск в Google"""
         if not self.search_func:
@@ -56,399 +37,191 @@ class WebSearch:
             return [f"Ошибка при поиске: {str(e)}"]
 
 class ChatGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Чат с ИИ")
+    def __init__(self):
+        # Настройка темы
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        
+        # Создание окна
+        self.root = ctk.CTk()
+        self.root.title("AI Chat")
         self.root.geometry("800x600")
         
-        # Применяем темную тему
-        self.apply_dark_theme()
+        # Инициализация модели
+        self.vocab_size = 1024
+        self.d_model = 256
+        self.nhead = 8
+        self.num_layers = 4
         
-        # Инициализируем бота и поисковик
-        self.bot = InteractiveLearningBot()
+        # Создаем бота и оптимизатор
+        self.chatbot = TitanMACBot(vocab_size=self.vocab_size, d_model=self.d_model, 
+                                 nhead=self.nhead, num_layers=self.num_layers)
+        self.optimizer = optim.Adam(self.chatbot.model.parameters(), lr=1e-3)
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=0)
+        
+        # История диалогов и файлы для сохранения
+        self.conversation_history = []
+        self.memory_file = 'chat_memory.json'
+        self.model_file = 'model.pth'
+        
+        # Загружаем историю и модель
+        self.load_memory()
+        self.load_model()
+        
+        # Состояние чата
+        self.choosing_response = False
+        self.current_user_input = ""
+        self.current_responses = []
+        self.response_buttons = []
+        
+        # Создаем поисковик
         self.web_search = WebSearch()
         
-        # Создаем и размещаем компоненты
-        self.create_widgets()
+        # Создаем интерфейс
+        self.setup_ui()
         
-        # Состояние выбора ответа
-        self.choosing_response = False
-        self.response_buttons = []
-        self.current_responses = []
-        
-    def apply_dark_theme(self):
-        self.root.configure(bg=DarkTheme.BG_COLOR)
-        
-        style = ttk.Style()
-        
-        # Настройка стиля фрейма
-        style.configure(
-            "Dark.TFrame",
-            background=DarkTheme.BG_COLOR,
-        )
-        
-        # Настройка стиля кнопок
-        style.configure(
-            "Dark.TButton",
-            background=DarkTheme.BUTTON_BG,
-            foreground=DarkTheme.BUTTON_FG,
-            borderwidth=0,
-            focuscolor=DarkTheme.BUTTON_BG_HOVER,
-            lightcolor=DarkTheme.BUTTON_BG,
-            darkcolor=DarkTheme.BUTTON_BG,
-            relief="flat",
-            padding=10
-        )
-        
-        # Настройка стиля полей ввода
-        style.configure(
-            "Dark.TEntry",
-            fieldbackground=DarkTheme.ENTRY_BG,
-            foreground=DarkTheme.ENTRY_FG,
-            borderwidth=0,
-            relief="flat",
-            padding=5
-        )
-        
-        # Настройка стиля при наведении на кнопку
-        style.map(
-            "Dark.TButton",
-            background=[("active", DarkTheme.BUTTON_BG_HOVER)],
-            foreground=[("active", DarkTheme.BUTTON_FG)]
-        )
-        
-    def create_widgets(self):
+    def setup_ui(self):
         # Создаем основной контейнер
-        main_container = ttk.Frame(self.root, padding="20", style="Dark.TFrame")
-        main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.main_frame = ctk.CTkFrame(self.root)
+        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
         
-        # Создаем фрейм для чата и скроллбара
-        chat_frame = ttk.Frame(main_container, style="Dark.TFrame")
-        chat_frame.grid(row=0, column=0, columnspan=2, pady=(0, 20), sticky="nsew")
-        chat_frame.columnconfigure(0, weight=1)
-        chat_frame.rowconfigure(0, weight=1)
+        # Создаем область чата
+        self.chat_frame = ctk.CTkScrollableFrame(self.main_frame)
+        self.chat_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
-        # Создаем область чата с отступами и закругленными углами
-        self.chat_area = tk.Text(
-            chat_frame, 
-            wrap=tk.WORD, 
-            width=70, 
-            height=20,
-            bg=DarkTheme.CHAT_BG,
-            fg=DarkTheme.CHAT_FG,
-            insertbackground=DarkTheme.FG_COLOR,
-            font=("Segoe UI", 10),
-            relief="flat",
-            padx=10,
-            pady=10,
-            selectbackground=DarkTheme.BUTTON_BG_HOVER,
-            selectforeground=DarkTheme.FG_COLOR,
+        # Создаем фрейм для ввода
+        input_frame = ctk.CTkFrame(self.main_frame)
+        input_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        # Поле ввода
+        self.input_field = ctk.CTkEntry(
+            input_frame,
+            placeholder_text="Введите сообщение...",
+            height=40,
+            font=("Segoe UI", 12)
         )
-        self.chat_area.grid(row=0, column=0, sticky="nsew")
-        
-        # Создаем скроллбар для чата
-        chat_scrollbar = tk.Scrollbar(
-            chat_frame, 
-            orient="vertical", 
-            command=self.chat_area.yview,
-            bg=DarkTheme.BG_COLOR,
-            troughcolor=DarkTheme.ENTRY_BG,
-            activebackground=DarkTheme.BUTTON_BG_HOVER,
-        )
-        chat_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.chat_area.configure(yscrollcommand=chat_scrollbar.set)
-        
-        # Настраиваем тег для сообщений пользователя
-        self.chat_area.tag_configure("user_msg", foreground=DarkTheme.CHAT_USER_MSG)
-        # Настраиваем тег для сообщений бота
-        self.chat_area.tag_configure("bot_msg", foreground=DarkTheme.CHAT_BOT_MSG)
-        self.chat_area.config(state='disabled')
-        
-        # Создаем поле ввода с закругленными углами
-        self.input_field = tk.Entry(
-            main_container, 
-            width=60,
-            bg=DarkTheme.ENTRY_BG,
-            fg=DarkTheme.ENTRY_FG,
-            insertbackground=DarkTheme.FG_COLOR,
-            font=("Segoe UI", 10),
-            relief="flat",
-            bd=10,
-            selectbackground=DarkTheme.BUTTON_BG_HOVER,
-            selectforeground=DarkTheme.FG_COLOR,
-        )
-        self.input_field.grid(row=1, column=0, pady=(0, 20), sticky="ew")
+        self.input_field.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.input_field.bind("<Return>", self.send_message)
         
-        # Создаем кнопку отправки
-        send_button = ttk.Button(
-            main_container, 
-            text="Отправить", 
-            command=self.send_message,
-            style="Dark.TButton"
+        # Кнопка отправки
+        send_button = ctk.CTkButton(
+            input_frame,
+            text="Отправить",
+            width=100,
+            height=40,
+            command=self.send_message
         )
-        send_button.grid(row=1, column=1, pady=(0, 20), padx=(10, 0))
+        send_button.pack(side="right")
         
-        # Создаем фрейм для карточек ответов
-        self.responses_frame = ttk.Frame(main_container, style="Dark.TFrame")
-        self.responses_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
-        
-        # Настраиваем растяжение
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_container.columnconfigure(0, weight=3)
-        main_container.columnconfigure(1, weight=1)
+        # Фрейм для вариантов ответов
+        self.responses_frame = ctk.CTkFrame(self.main_frame)
+        self.responses_frame.pack(fill="x", padx=10)
         
     def append_to_chat(self, message, is_user=True):
-        self.chat_area.config(state='normal')
+        # Создаем фрейм для сообщения
+        msg_frame = ctk.CTkFrame(self.chat_frame)
+        msg_frame.pack(fill="x", padx=5, pady=5)
+        
+        # Добавляем метку с текстом сообщения
         prefix = "Вы: " if is_user else "Бот: "
-        tag = "user_msg" if is_user else "bot_msg"
+        msg_label = ctk.CTkLabel(
+            msg_frame,
+            text=f"{prefix}{message}",
+            font=("Segoe UI", 12),
+            wraplength=600,
+            justify="left"
+        )
+        msg_label.pack(anchor="w", padx=10, pady=5)
         
-        self.chat_area.insert(tk.END, prefix, tag)
-        self.chat_area.insert(tk.END, message + "\n\n")  # Добавляем дополнительный перенос строки
-        self.chat_area.see(tk.END)
-        self.chat_area.config(state='disabled')
+    def show_response_options(self, responses):
+        # Очищаем предыдущие кнопки
+        for button in self.response_buttons:
+            button.destroy()
+        self.response_buttons.clear()
         
-    def generate_response_options(self, user_input):
-        # Генерируем 4 разных варианта ответа
-        responses = []
-        temperatures = [0.5, 0.7, 1.0, 1.2]
-        
-        # Получаем базовый ответ
-        base_response = self.bot.generate_response(user_input)
-        responses.append(base_response)
-        
-        # Генерируем дополнительные варианты
-        while len(responses) < 4:
-            # Пробуем сгенерировать новый ответ
-            temp = temperatures[len(responses) - 1]
-            response = self.bot.try_generate_better_response(user_input, base_response)
+        # Создаем новые кнопки с вариантами ответов
+        for i, response in enumerate(responses):
+            response_button = ctk.CTkButton(
+                self.responses_frame,
+                text=f"Вариант {i+1}:\n{response}",
+                command=lambda r=response: self.select_response(r),
+                height=60,
+                font=("Segoe UI", 12),
+                wraplength=500
+            )
+            response_button.pack(fill="x", padx=5, pady=5)
+            self.response_buttons.append(response_button)
             
-            # Добавляем только если это новый уникальный ответ
-            if response not in responses:
-                responses.append(response)
+        # Добавляем кнопку поиска
+        search_button = ctk.CTkButton(
+            self.responses_frame,
+            text="🔍 Поиск в интернете",
+            command=self.search_web,
+            height=40,
+            font=("Segoe UI", 12)
+        )
+        search_button.pack(fill="x", padx=5, pady=5)
+        self.response_buttons.append(search_button)
         
-        return responses
+        # Добавляем кнопку своего варианта
+        custom_button = ctk.CTkButton(
+            self.responses_frame,
+            text="✏️ Свой вариант ответа",
+            command=self.show_custom_response_dialog,
+            height=40,
+            font=("Segoe UI", 12)
+        )
+        custom_button.pack(fill="x", padx=5, pady=5)
+        self.response_buttons.append(custom_button)
         
     def show_custom_response_dialog(self):
-        # Создаем диалоговое окно для ввода своего ответа
-        dialog = tk.Toplevel(self.root)
+        dialog = ctk.CTkToplevel(self.root)
         dialog.title("Свой вариант ответа")
-        dialog.geometry("400x200")
-        dialog.configure(bg=DarkTheme.BG_COLOR)
+        dialog.geometry("400x300")
         dialog.transient(self.root)
         dialog.grab_set()
         
-        # Создаем фрейм для текстового поля и скроллбара
-        text_frame = ttk.Frame(dialog, style="Dark.TFrame")
-        text_frame.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
-        text_frame.columnconfigure(0, weight=1)
-        text_frame.rowconfigure(0, weight=1)
-        
-        # Создаем текстовое поле для ввода
-        text_input = tk.Text(
-            text_frame,
-            wrap=tk.WORD,
-            width=40,
-            height=5,
-            bg=DarkTheme.ENTRY_BG,
-            fg=DarkTheme.ENTRY_FG,
-            insertbackground=DarkTheme.FG_COLOR,
-            font=("Segoe UI", 10),
-            relief="flat",
-            padx=10,
-            pady=10,
-            selectbackground=DarkTheme.BUTTON_BG_HOVER,
-            selectforeground=DarkTheme.FG_COLOR,
+        # Создаем текстовое поле
+        text_input = ctk.CTkTextbox(
+            dialog,
+            height=200,
+            font=("Segoe UI", 12)
         )
-        text_input.grid(row=0, column=0, sticky="nsew")
-        
-        # Создаем скроллбар для текстового поля
-        text_scrollbar = tk.Scrollbar(
-            text_frame, 
-            orient="vertical", 
-            command=text_input.yview,
-            bg=DarkTheme.BG_COLOR,
-            troughcolor=DarkTheme.ENTRY_BG,
-            activebackground=DarkTheme.BUTTON_BG_HOVER,
-        )
-        text_scrollbar.grid(row=0, column=1, sticky="ns")
-        text_input.configure(yscrollcommand=text_scrollbar.set)
+        text_input.pack(fill="both", expand=True, padx=20, pady=(20, 10))
         
         def submit_response():
-            response = text_input.get("1.0", tk.END).strip()
+            response = text_input.get("1.0", "end-1c").strip()
             if response:
                 self.select_response(response)
                 dialog.destroy()
         
         # Кнопка подтверждения
-        submit_button = ttk.Button(
+        submit_button = ctk.CTkButton(
             dialog,
             text="Подтвердить",
             command=submit_response,
-            style="Dark.TButton"
+            height=40,
+            font=("Segoe UI", 12)
         )
         submit_button.pack(pady=(0, 20))
         
-        # Фокус на поле ввода
         text_input.focus_set()
-        
-    def show_response_options(self, responses):
-        # Очищаем предыдущие кнопки
-        for frame, label in self.response_buttons:
-            frame.destroy()
-        self.response_buttons.clear()
-        
-        # Создаем новые кнопки с вариантами ответов
-        for i, response in enumerate(responses):
-            # Создаем фрейм для кнопки с темным фоном
-            btn_frame = tk.Frame(
-                self.responses_frame,
-                bg=DarkTheme.BUTTON_BG,
-                padx=10,
-                pady=10
-            )
-            btn_frame.grid(row=i//2, column=i%2, padx=5, pady=5, sticky="ew")
-            
-            # Создаем метку с текстом внутри фрейма
-            label = tk.Label(
-                btn_frame,
-                text=f"Вариант {i+1}:\n{response}",
-                bg=DarkTheme.BUTTON_BG,
-                fg=DarkTheme.BUTTON_FG,
-                font=("Segoe UI", 10),
-                wraplength=300,
-                justify=tk.LEFT,
-                padx=5,
-                pady=5
-            )
-            label.pack(fill=tk.BOTH, expand=True)
-            
-            # Добавляем обработчики событий
-            self.add_button_handlers(btn_frame, label, response)
-            
-            self.response_buttons.append((btn_frame, label))
-            
-        # Добавляем кнопку поиска в интернете
-        search_frame = tk.Frame(
-            self.responses_frame,
-            bg=DarkTheme.BUTTON_BG,
-            padx=10,
-            pady=10
-        )
-        search_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
-        
-        search_label = tk.Label(
-            search_frame,
-            text="🔍 Поиск в интернете",
-            bg=DarkTheme.BUTTON_BG,
-            fg=DarkTheme.BUTTON_FG,
-            font=("Segoe UI", 10),
-            padx=5,
-            pady=5
-        )
-        search_label.pack(fill=tk.BOTH, expand=True)
-        
-        def on_search_enter(e):
-            search_frame.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-            search_label.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-            
-        def on_search_leave(e):
-            search_frame.configure(bg=DarkTheme.BUTTON_BG)
-            search_label.configure(bg=DarkTheme.BUTTON_BG)
-            
-        search_frame.bind("<Enter>", on_search_enter)
-        search_frame.bind("<Leave>", on_search_leave)
-        search_frame.bind("<Button-1>", lambda e: self.search_web())
-        search_label.bind("<Enter>", on_search_enter)
-        search_label.bind("<Leave>", on_search_leave)
-        search_label.bind("<Button-1>", lambda e: self.search_web())
-        
-        # Добавляем кнопку для своего варианта
-        custom_frame = tk.Frame(
-            self.responses_frame,
-            bg=DarkTheme.BUTTON_BG,
-            padx=10,
-            pady=10
-        )
-        custom_frame.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-        
-        custom_label = tk.Label(
-            custom_frame,
-            text="✏️ Свой вариант ответа",
-            bg=DarkTheme.BUTTON_BG,
-            fg=DarkTheme.BUTTON_FG,
-            font=("Segoe UI", 10),
-            padx=5,
-            pady=5
-        )
-        custom_label.pack(fill=tk.BOTH, expand=True)
-        
-        def on_custom_enter(e):
-            custom_frame.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-            custom_label.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-            
-        def on_custom_leave(e):
-            custom_frame.configure(bg=DarkTheme.BUTTON_BG)
-            custom_label.configure(bg=DarkTheme.BUTTON_BG)
-            
-        custom_frame.bind("<Enter>", on_custom_enter)
-        custom_frame.bind("<Leave>", on_custom_leave)
-        custom_frame.bind("<Button-1>", lambda e: self.show_custom_response_dialog())
-        custom_label.bind("<Enter>", on_custom_enter)
-        custom_label.bind("<Leave>", on_custom_leave)
-        custom_label.bind("<Button-1>", lambda e: self.show_custom_response_dialog())
-        
-        self.response_buttons.extend([(search_frame, search_label), (custom_frame, custom_label)])
-        
-    def search_web(self):
-        """Поиск в интернете и отображение результатов"""
-        # Получаем результаты поиска
-        search_results = self.web_search.search(self.current_user_input)
-        
-        # Очищаем текущие варианты ответов
-        for frame, label in self.response_buttons:
-            frame.destroy()
-        self.response_buttons.clear()
-        
-        # Показываем результаты поиска как варианты ответов
-        self.show_response_options(search_results)
-        
-    def add_button_handlers(self, frame, label, response):
-        """Добавляет обработчики событий для кнопки"""
-        def on_enter(e):
-            frame.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-            label.configure(bg=DarkTheme.BUTTON_BG_HOVER)
-            
-        def on_leave(e):
-            frame.configure(bg=DarkTheme.BUTTON_BG)
-            label.configure(bg=DarkTheme.BUTTON_BG)
-            
-        def on_click(r=response):
-            self.select_response(r)
-            
-        frame.bind("<Enter>", on_enter)
-        frame.bind("<Leave>", on_leave)
-        frame.bind("<Button-1>", lambda e, r=response: on_click(r))
-        label.bind("<Enter>", on_enter)
-        label.bind("<Leave>", on_leave)
-        label.bind("<Button-1>", lambda e, r=response: on_click(r))
         
     def select_response(self, selected_response):
         # Добавляем выбранный ответ в чат
         self.append_to_chat(selected_response, is_user=False)
         
         # Очищаем кнопки
-        for frame, label in self.response_buttons:
-            frame.destroy()
+        for button in self.response_buttons:
+            button.destroy()
         self.response_buttons.clear()
         
         # Обучаем бота на выбранном ответе
-        self.bot.learn_from_interaction(self.current_user_input, selected_response)
+        self.learn_from_interaction(self.current_user_input, selected_response)
         
         # Сбрасываем состояние выбора
         self.choosing_response = False
-        self.input_field.config(state='normal')
+        self.input_field.configure(state="normal")
         
     def send_message(self, event=None):
         if self.choosing_response:
@@ -458,27 +231,157 @@ class ChatGUI:
         if not message:
             return
             
-        # Сохраняем текущий ввод для обучения
+        self.input_field.delete(0, "end")
+        self.append_to_chat(message, is_user=True)
+        
         self.current_user_input = message
-        
-        # Очищаем поле ввода
-        self.input_field.delete(0, tk.END)
-        
-        # Добавляем сообщение пользователя в чат
-        self.append_to_chat(message)
-        
-        # Генерируем варианты ответов
         self.current_responses = self.generate_response_options(message)
         
-        # Показываем варианты ответов
-        self.choosing_response = True
-        self.input_field.config(state='disabled')
         self.show_response_options(self.current_responses)
+        
+        self.choosing_response = True
+        self.input_field.configure(state="disabled")
+        
+    def search_web(self):
+        search_results = self.web_search.search(self.current_user_input)
+        self.show_response_options(search_results)
+        
+    def save_memory(self):
+        """Сохраняем историю общения"""
+        with open(self.memory_file, 'w', encoding='utf-8') as f:
+            json.dump(self.conversation_history, f, ensure_ascii=False, indent=2)
+            
+    def load_memory(self):
+        """Загружаем историю общения"""
+        if os.path.exists(self.memory_file):
+            try:
+                with open(self.memory_file, 'r', encoding='utf-8') as f:
+                    self.conversation_history = json.load(f)
+                print(f"Загружено {len(self.conversation_history)} диалогов из памяти")
+            except:
+                print("Не удалось загрузить память, начинаем с чистого листа")
+                self.conversation_history = []
+                
+    def save_model(self):
+        """Сохраняем модель"""
+        self.chatbot.save(self.model_file)
+        
+    def load_model(self):
+        """Загружаем модель"""
+        if os.path.exists(self.model_file):
+            try:
+                self.chatbot.load(self.model_file)
+                print("Модель успешно загружена")
+            except:
+                print("Не удалось загрузить модель, начинаем с начала")
+                
+    def try_generate_better_response(self, user_input, wrong_response):
+        """Пытается сгенерировать лучший ответ"""
+        # Собираем все похожие диалоги из истории
+        similar_dialogues = []
+        for conv in self.conversation_history:
+            if any(word in conv['user_input'].lower() for word in user_input.lower().split()):
+                similar_dialogues.append(conv)
+        
+        # Генерируем варианты ответов с разными параметрами
+        attempts = []
+        temperatures = [0.5, 0.7, 1.0, 1.2]
+        max_lengths = [50, 100, 150]
+        
+        for temp in temperatures:
+            for length in max_lengths:
+                response = self.chatbot.generate_response(user_input, temperature=temp, max_length=length)
+                if response and response != wrong_response and len(response.strip()) >= 3:
+                    attempts.append(response)
+        
+        # Убираем дубликаты и пустые ответы
+        attempts = list(set(filter(None, attempts)))
+        attempts = [r for r in attempts if r != wrong_response and len(r.strip()) >= 3]
+        
+        if attempts:
+            return attempts[torch.randint(0, len(attempts), (1,)).item()]
+            
+        # Если нет подходящих ответов, генерируем новый ответ с высокой температурой
+        return self.chatbot.generate_response(user_input, temperature=1.2, max_length=150)
+        
+    def learn_from_interaction(self, user_input, wrong_response):
+        """Обучение на одном взаимодействии"""
+        # Генерируем новый ответ
+        better_response = self.try_generate_better_response(user_input, wrong_response)
+        
+        # Кодируем входной текст и новый ответ
+        input_tokens = self.chatbot.tokenizer.encode(user_input)
+        target_tokens = self.chatbot.tokenizer.encode(better_response)
+        
+        # Создаем тензоры
+        input_tensor = torch.tensor([input_tokens]).long()
+        target_tensor = torch.tensor([target_tokens]).long()
+        
+        # Увеличиваем learning rate для быстрого обучения
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] *= 10
+            
+        # Обучаем модель
+        self.optimizer.zero_grad()
+        output = self.chatbot.model(input_tensor)
+        
+        # Обрезаем выход до длины цели
+        min_len = min(output.size(1), target_tensor.size(1))
+        output = output[:, :min_len, :]
+        target_tensor = target_tensor[:, :min_len]
+        
+        # Считаем loss
+        loss = self.loss_fn(output.view(-1, self.chatbot.model.vocab_size), target_tensor.view(-1))
+        loss.backward()
+        self.optimizer.step()
+        
+        # Возвращаем learning rate обратно
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] *= 0.1
+        
+        # Сохраняем взаимодействие в истории
+        self.conversation_history.append({
+            'user_input': user_input,
+            'bot_response': better_response,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'loss': float(loss.item()),
+            'was_corrected': True
+        })
+        
+        # Сохраняем обновленную историю и модель
+        self.save_memory()
+        self.save_model()
+        
+        return better_response, float(loss.item())
+        
+    def generate_response_options(self, user_input):
+        """Генерирует варианты ответов на ввод пользователя"""
+        # Пробуем разные параметры для генерации
+        responses = []
+        temperatures = [0.7, 1.0, 1.2]
+        max_lengths = [50, 100, 150]
+        
+        for temp in temperatures:
+            for length in max_lengths:
+                response = self.chatbot.generate_response(user_input, temperature=temp, max_length=length)
+                if response and len(response.strip()) >= 3:
+                    responses.append(response)
+        
+        # Убираем дубликаты и пустые ответы
+        responses = list(set(filter(None, responses)))
+        responses = [r for r in responses if len(r.strip()) >= 3]
+        
+        if not responses:
+            # Если не удалось сгенерировать ответы, пробуем с более высокой температурой
+            response = self.chatbot.generate_response(user_input, temperature=1.5, max_length=200)
+            if response and len(response.strip()) >= 3:
+                responses = [response]
+        
+        return responses[:5]  # Возвращаем до 5 вариантов
 
 def main():
-    root = tk.Tk()
-    app = ChatGUI(root)
-    root.mainloop()
+    app = ChatGUI()
+    app.root.mainloop()
 
 if __name__ == "__main__":
     main() 
