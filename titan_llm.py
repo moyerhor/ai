@@ -1,116 +1,153 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import List
 
-class MACLayer(nn.Module):
-    def __init__(self, hidden_size):
-        super(MACLayer, self).__init__()
-        self.attention = nn.MultiheadAttention(hidden_size, num_heads=8)
-        self.linear1 = nn.Linear(hidden_size, hidden_size * 4)
-        self.linear2 = nn.Linear(hidden_size * 4, hidden_size)
-        self.norm = nn.LayerNorm(hidden_size)
-        
-    def forward(self, x):
-        # Self-attention
-        attn_output, _ = self.attention(x, x, x)
-        x = x + attn_output
-        
-        # Feed-forward
-        ff_output = self.linear1(x)
-        ff_output = F.relu(ff_output)
-        ff_output = self.linear2(ff_output)
-        
-        # Residual connection и нормализация
-        x = self.norm(x + ff_output)
-        return x
-
-class TitanMAC(nn.Module):
-    def __init__(self, vocab_size=256, hidden_size=512, num_layers=4):
-        super(TitanMAC, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
+class SimpleBot(nn.Module):
+    def __init__(self, vocab_size=1024, hidden_size=256):
+        super().__init__()
         self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
         
-        # Эмбеддинг слов
+        # Простой энкодер
         self.embedding = nn.Embedding(vocab_size, hidden_size)
+        self.encoder = nn.LSTM(hidden_size, hidden_size, num_layers=2, batch_first=True)
         
-        # MAC слои
-        self.mac_layers = nn.ModuleList([
-            MACLayer(hidden_size) for _ in range(num_layers)
-        ])
+        # Простой декодер
+        self.decoder = nn.LSTM(hidden_size, hidden_size, num_layers=2, batch_first=True)
+        self.output = nn.Linear(hidden_size, vocab_size)
         
-        # Выходной слой
-        self.output_layer = nn.Linear(hidden_size, vocab_size)
+    def forward(self, src):
+        # Эмбеддинг входных токенов
+        embedded = self.embedding(src)
         
-    def forward(self, x):
-        # Преобразуем входные токены в эмбеддинги
-        x = self.embedding(x)
+        # Кодирование
+        encoder_output, (hidden, cell) = self.encoder(embedded)
         
-        # Проходим через MAC слои
-        for layer in self.mac_layers:
-            x = layer(x)
+        # Декодирование
+        decoder_output, _ = self.decoder(embedded, (hidden, cell))
         
-        # Выходной слой
-        return self.output_layer(x)
+        # Получаем логиты для каждого токена
+        output = self.output(decoder_output)
+        
+        return output
     
-    def generate_text(self, prompt, max_length=100, temperature=0.7):
+    def generate(self, input_ids, max_length=100, temperature=0.7):
         self.eval()
         with torch.no_grad():
-            # Преобразуем prompt в токены
-            tokens = torch.tensor([[ord(c) for c in prompt]], dtype=torch.long)
+            # Начальный проход через энкодер
+            embedded = self.embedding(input_ids)
+            _, (hidden, cell) = self.encoder(embedded)
             
-            # Генерируем текст
+            # Используем последний токен входа как первый токен для декодера
+            current_token = input_ids[:, -1:]
+            generated = input_ids
+            
+            # Генерируем токены
             for _ in range(max_length):
-                # Получаем предсказание следующего токена
-                outputs = self(tokens)
-                next_token_logits = outputs[0, -1, :] / temperature
-                next_token_probs = F.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(next_token_probs, 1)
+                token_embedding = self.embedding(current_token)
+                decoder_output, (hidden, cell) = self.decoder(token_embedding, (hidden, cell))
                 
-                # Добавляем новый токен к последовательности
-                tokens = torch.cat([tokens, next_token.unsqueeze(0)], dim=1)
+                # Получаем следующий токен
+                logits = self.output(decoder_output)
                 
-                # Преобразуем токен в символ
-                next_char = chr(next_token.item())
-                if next_char == '\n':  # Останавливаемся при встрече символа новой строки
+                # Применяем температуру и softmax
+                logits = logits / temperature
+                probs = F.softmax(logits, dim=-1)
+                
+                # Фильтруем нежелательные токены
+                probs[0, 0, :32] = 0  # Убираем контрольные символы
+                probs = probs / probs.sum()  # Нормализуем
+                
+                # Выбираем следующий токен
+                next_token = torch.multinomial(probs[0, 0], 1).unsqueeze(0)
+                
+                # Добавляем к результату
+                generated = torch.cat([generated, next_token], dim=1)
+                current_token = next_token
+                
+                # Проверяем на токен конца последовательности
+                if next_token.item() == self.vocab_size - 1 or next_token.item() == 3:  # EOS token
                     break
-            
-            # Преобразуем токены обратно в текст
-            generated_text = ''.join([chr(t.item()) for t in tokens[0]])
-            return generated_text
+                    
+        return generated
 
-class ChatBot:
-    def __init__(self, model_path, vocab_size=256, hidden_size=256):
-        self.model = TitanMAC(vocab_size=vocab_size, hidden_size=hidden_size)
-        checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+class SimpleTokenizer:
+    def __init__(self, vocab_size=1024):
+        self.vocab_size = vocab_size
+        
+        # Создаем простой словарь
+        self.char_to_idx = {chr(i): i for i in range(32, 127)}
+        self.idx_to_char = {i: chr(i) for i in range(32, 127)}
+        
+        # Добавляем специальные токены
+        self.special_tokens = {
+            '<PAD>': 0,
+            '<UNK>': 1,
+            '<BOS>': 2,
+            '<EOS>': 3
+        }
+        
+        # Обновляем словари
+        self.char_to_idx.update(self.special_tokens)
+        self.idx_to_char.update({v: k for k, v in self.special_tokens.items()})
+        
+    def encode(self, text: str) -> List[int]:
+        tokens = [self.special_tokens['<BOS>']]
+        for char in text:
+            if char in self.char_to_idx:
+                tokens.append(self.char_to_idx[char])
+            else:
+                tokens.append(self.special_tokens['<UNK>'])
+        tokens.append(self.special_tokens['<EOS>'])
+        return tokens
+        
+    def decode(self, tokens: List[int]) -> str:
+        text = []
+        for token in tokens:
+            if token in [self.special_tokens['<PAD>'], self.special_tokens['<BOS>'], self.special_tokens['<UNK>']]:
+                continue
+            if token == self.special_tokens['<EOS>']:
+                break
+            if token in self.idx_to_char:
+                text.append(self.idx_to_char[token])
+        return ''.join(text)
+
+class SimpleChatBot:
+    def __init__(self, vocab_size=1024, hidden_size=256):
+        self.model = SimpleBot(vocab_size=vocab_size, hidden_size=hidden_size)
+        self.tokenizer = SimpleTokenizer(vocab_size=vocab_size)
+        
+    def save(self, path: str):
+        torch.save(self.model.state_dict(), path)
+        
+    def load(self, path: str):
+        self.model.load_state_dict(torch.load(path, map_location=torch.device('cpu')))
+        
+    def generate_response(self, text: str, max_length: int = 100, temperature: float = 0.7) -> str:
         self.model.eval()
-        
-    def generate_response(self, text, max_length=100):
-        # Преобразуем входной текст в токены
-        tokens = [min(ord(c) % self.model.vocab_size, self.model.vocab_size-1) for c in text]
-        
-        # Создаем тензор из токенов
-        input_tensor = torch.tensor(tokens, dtype=torch.long).unsqueeze(0)
-        
-        # Генерируем ответ
-        response_tokens = []
         with torch.no_grad():
-            for _ in range(max_length):
-                # Получаем предсказание следующего токена
-                output = self.model(input_tensor)
-                next_token = output[0, -1].argmax().item()
+            # Кодируем входной текст
+            tokens = self.tokenizer.encode(text)
+            input_ids = torch.tensor([tokens]).long()
+            
+            # Пробуем сгенерировать ответ несколько раз с разной температурой
+            attempts = [
+                (0.7, max_length),  # Стандартная попытка
+                (1.0, max_length),  # Более креативная
+                (0.5, max_length * 2),  # Более длинная и консервативная
+                (1.2, max_length // 2),  # Короткая но более случайная
+            ]
+            
+            for temp, length in attempts:
+                # Генерируем ответ с текущими параметрами
+                output_ids = self.model.generate(input_ids, max_length=length, temperature=temp)
+                response = self.tokenizer.decode(output_ids[0].tolist())
                 
-                # Добавляем токен к ответу
-                response_tokens.append(next_token)
-                
-                # Если сгенерировали точку или перенос строки, заканчиваем
-                if chr(next_token) in ['.', '\n']:
-                    break
-                
-                # Обновляем входной тензор
-                input_tensor = torch.cat([input_tensor, torch.tensor([[next_token]], dtype=torch.long)], dim=1)
-        
-        # Преобразуем токены обратно в текст
-        response = ''.join([chr(t) for t in response_tokens])
-        return response 
+                # Если ответ не пустой и содержит хотя бы 2 символа, возвращаем его
+                if response and len(response.strip()) >= 2 and not response.isspace():
+                    return response
+            
+            # Если все попытки не удались, генерируем простой ответ
+            simple_responses = ["Привет!", "Да", "Нет", "Хорошо", "Интересно", "Понятно"]
+            return simple_responses[torch.randint(0, len(simple_responses), (1,)).item()] 
